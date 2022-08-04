@@ -27,9 +27,10 @@ class iNatPhotoScraper:
                  taxon_id: int,
                  output_dir: Optional[str] = None,
                  resume_from_page: int = 0,
-                 stop_at_page: Optional[int] = None, 
+                 stop_at_page: Optional[int] = None,
                  resume_from_uuid_index: int = 0,
-                 upload_to_s3: bool = True):
+                 upload_to_s3: bool = True,
+                 one_page_only: bool = True):
         super(iNatPhotoScraper, self).__init__()
         self.taxon_id = taxon_id
         self.output_dir = output_dir
@@ -37,6 +38,7 @@ class iNatPhotoScraper:
         self.stop_at_page = stop_at_page
         self.resume_from_uuid_index = resume_from_uuid_index
         self.upload_to_s3 = upload_to_s3
+        self.one_page_only = one_page_only
         self.logger = self._logger()
         self.s3 = self._s3_client()
         self.data = {
@@ -211,10 +213,13 @@ class iNatPhotoScraper:
             self.data['uuids'] += uuids
             uuids = uuids[self.resume_from_uuid_index:]
 
-            for n, _uuid in enumerate(uuids, start=self.resume_from_uuid_index):
+            for n, _uuid in enumerate(uuids,
+                                      start=self.resume_from_uuid_index):
                 self.resume_from_uuid_index = n
                 self.logger.debug(f'Page: {page}, UUID index: {n}')
                 self.download_photos(_uuid)
+            if self.one_page_only:
+                break
 
 
 def _opts() -> argparse.Namespace:
@@ -245,16 +250,20 @@ def _opts() -> argparse.Namespace:
     parser.add_argument('--upload-to-s3',
                         help='Upload to a S3-compatible bucket',
                         action='store_true')
+    parser.add_argument('--one-page-only',
+                        help='Terminate after completing a single page',
+                        action='store_true')
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     load_dotenv()
     args = _opts()
-    scraper = iNatPhotoScraper(taxon_id=args.taxon_id,
-                               output_dir=args.output_dir,
-                               resume_from_page=args.resume_from_page,
-                               stop_at_page=args.stop_at_page,
-                               resume_from_uuid_index=args.resume_from_uuid_index,
-                               upload_to_s3=args.upload_to_s3)
+    scraper = iNatPhotoScraper(
+        taxon_id=args.taxon_id,
+        output_dir=args.output_dir,
+        resume_from_page=args.resume_from_page,
+        stop_at_page=args.stop_at_page,
+        resume_from_uuid_index=args.resume_from_uuid_index,
+        upload_to_s3=args.upload_to_s3)
     scraper.run()
