@@ -32,6 +32,7 @@ jobs:
         S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
         S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
         S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+        TAXON_ID: ${{ secrets.TAXON_ID }}
         PAGE_NUMBER: ${{ matrix.page }}
       run: |
-        python scraper.py --upload-to-s3 -p $PAGE_NUMBER
+        python scraper.py -t $TAXON_ID -p $PAGE_NUMBER --upload-to-s3
