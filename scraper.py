@@ -3,6 +3,9 @@
 
 import argparse
 import hashlib
+import io
+import os
+import re
 import signal
 import sys
 import time
@@ -11,10 +14,11 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+from dotenv import load_dotenv
 from loguru import logger
+from minio import Minio
 from requests.exceptions import HTTPError, JSONDecodeError
 from requests.structures import CaseInsensitiveDict
-from tqdm import tqdm
 
 
 class iNatPhotoScraper:
@@ -23,19 +27,31 @@ class iNatPhotoScraper:
                  taxon_id: int,
                  output_dir: Optional[str] = None,
                  latest_page: int = 0,
-                 latest_uuid_index: int = 0):
+                 latest_uuid_index: int = 0,
+                 upload_to_s3: bool = True):
         super(iNatPhotoScraper, self).__init__()
         self.taxon_id = taxon_id
         self.output_dir = output_dir
         self.latest_page = latest_page
         self.latest_uuid_index = latest_uuid_index
+        self.upload_to_s3 = upload_to_s3
         self.logger = self._logger()
+        self.s3 = self._s3_client()
         self.data = {
             'uuids': [],
             'observations': [],
             'failed_observations': [],
             'failed_downloads': []
         }
+
+    def _s3_client(self):
+        s3_client = None
+        if self.upload_to_s3:
+            s3_endpoint = re.sub(r'https?:\/\/', '', os.environ['S3_ENDPOINT'])
+            s3_client = Minio(s3_endpoint,
+                              access_key=os.environ['S3_ACCESS_KEY'],
+                              secret_key=os.environ['S3_SECRET_KEY'])
+        return s3_client
 
     def _logger(self):
         logger.remove()
@@ -151,8 +167,16 @@ class iNatPhotoScraper:
                 continue
 
             fname = hashlib.md5(r.content).hexdigest() + suffix
-            with open(Path(f'{self.output_dir}/{fname}'), 'wb') as f:
-                f.write(r.content)
+
+            if self.upload_to_s3:
+                self.s3.put_object(os.environ['S3_BUCKET_NAME'],
+                                   fname,
+                                   io.BytesIO(r.content),
+                                   length=-1,
+                                   part_size=10 * 1024 * 1024)
+            else:
+                with open(Path(f'{self.output_dir}/{fname}'), 'wb') as f:
+                    f.write(r.content)
             self.logger.debug(f'({photo_uuid}) ✅ Downloaded')
 
     def run(self):
@@ -160,7 +184,9 @@ class iNatPhotoScraper:
 
         if not self.output_dir:
             self.output_dir = f'downloaded_images_{self.taxon_id}'
-        Path(self.output_dir).mkdir(exist_ok=True, parents=True)
+
+        if not self.upload_to_s3:
+            Path(self.output_dir).mkdir(exist_ok=True, parents=True)
 
         num_pages = self._get_num_pages()
         pages_range = range(num_pages)
@@ -170,7 +196,7 @@ class iNatPhotoScraper:
 
         pages_range = pages_range[self.latest_page:]
 
-        for page in tqdm(pages_range):
+        for page in pages_range:
             self.logger.info(f'Current page: {page}')
             self.latest_page = page
             uuids = self.get_observations_uuids(page)
@@ -194,6 +220,10 @@ def _opts() -> argparse.Namespace:
                         help='Taxon id',
                         type=int,
                         required=True)
+    parser.add_argument('-o',
+                        '--output-dir',
+                        help='Output directory',
+                        type=str)
     parser.add_argument('-p',
                         '--latest-page',
                         help='Page to resume from',
@@ -204,17 +234,19 @@ def _opts() -> argparse.Namespace:
                         help='UUID index to resume from',
                         type=int,
                         default=0)
-    parser.add_argument('-o',
-                        '--output-dir',
-                        help='Output directory',
-                        type=str)
+    parser.add_argument('-s',
+                        '--upload-to-s3',
+                        help='Upload to a S3-compatible bucket',
+                        action='store_true')
     return parser.parse_args()
 
 
 if __name__ == '__main__':
+    load_dotenv()
     args = _opts()
     scraper = iNatPhotoScraper(taxon_id=args.taxon_id,
                                output_dir=args.output_dir,
                                latest_page=args.latest_page,
-                               latest_uuid_index=args.latest_uuid_index)
+                               latest_uuid_index=args.latest_uuid_index,
+                               upload_to_s3=args.upload_to_s3)
     scraper.run()
