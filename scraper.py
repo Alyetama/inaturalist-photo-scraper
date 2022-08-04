@@ -17,6 +17,7 @@ import requests
 from dotenv import load_dotenv
 from loguru import logger
 from minio import Minio
+from minio.error import InvalidResponseError
 from requests.exceptions import HTTPError, JSONDecodeError
 from requests.structures import CaseInsensitiveDict
 
@@ -111,6 +112,7 @@ class iNatPhotoScraper:
         except (HTTPError, JSONDecodeError) as e:
             self.logger.error(f'Failed to get {url}! (ERROR: {e})')
             self.logger.exception(e)
+            self.data['failed_observations'].append(url)
             return
         finally:
             time.sleep(1)
@@ -118,7 +120,10 @@ class iNatPhotoScraper:
     def _get_num_pages(self):
         url = 'https://api.inaturalist.org/v2/observations'
         params = {'taxon_id': self.taxon_id}
-        total_results = self._get_request(url, params=params)['total_results']
+        r = self._get_request(url, params=params)
+        if not r:
+            sys.exit('Failed to ger number of pages!')
+        total_results = r['total_results']
         return total_results // 200 + 1
 
     def get_observations_uuids(self, page: int) -> list:
@@ -147,6 +152,7 @@ class iNatPhotoScraper:
         observation = self._get_request(url, allow_redirects=True)
         if not observation:
             self.data['failed_observations'].append(_uuid)
+            return
 
         self.data['observations'].append(observation)
         observation_photos = observation['observation_photos']
@@ -173,15 +179,19 @@ class iNatPhotoScraper:
             fname = hashlib.md5(r.content).hexdigest() + suffix
 
             if self.upload_to_s3:
-                self.s3.put_object(os.environ['S3_BUCKET_NAME'],
-                                   fname,
-                                   io.BytesIO(r.content),
-                                   length=-1,
-                                   part_size=10 * 1024 * 1024)
+                try:
+                    self.s3.put_object(os.environ['S3_BUCKET_NAME'],
+                                       fname,
+                                       io.BytesIO(r.content),
+                                       length=-1,
+                                       part_size=10 * 1024 * 1024)
+                except InvalidResponseError:
+                    self.data['failed_downloads'].append(photo)
             else:
                 with open(Path(f'{self.output_dir}/{fname}'), 'wb') as f:
                     f.write(r.content)
             self.logger.debug(f'({photo_uuid}) ✅ Downloaded')
+        return True
 
     def run(self):
         signal.signal(signal.SIGINT, self._keyboard_interrupt_handler)
@@ -206,6 +216,14 @@ class iNatPhotoScraper:
             self.logger.info(f'Current page: {page}')
             self.resume_from_page = page
             uuids = self.get_observations_uuids(page)
+
+            if not uuids:
+                self.data['failed_observations'].append(f'failed page: {page}')
+                if self.one_page_only:
+                    break
+                else:
+                    continue
+
             if uuids in self.data['uuids']:
                 self.logger.warning(f'Duplicate response in page {page}! '
                                     'Skipping...')
@@ -217,7 +235,8 @@ class iNatPhotoScraper:
                                       start=self.resume_from_uuid_index):
                 self.resume_from_uuid_index = n
                 self.logger.debug(f'Page: {page}, UUID index: {n}')
-                self.download_photos(_uuid)
+                res = self.download_photos(_uuid)
+
             if self.one_page_only:
                 break
 
