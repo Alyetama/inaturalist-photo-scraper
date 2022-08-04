@@ -12,7 +12,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        page: [1, 2, 3]
+        page_start: [0, 2, 4, 6, 8, 10]
+        page_end: [1, 3, 5, 7, 9, 11]
 
     runs-on: ubuntu-latest
 
@@ -33,6 +34,7 @@ jobs:
         S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
         S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
         TAXON_ID: ${{ secrets.TAXON_ID }}
-        PAGE_NUMBER: ${{ matrix.page }}
+        PAGE_START: ${{ matrix.page_start }}
+        PAGE_END: ${{ matrix.page_end }}
       run: |
-        python scraper.py -t $TAXON_ID -p $PAGE_NUMBER --upload-to-s3
+        python scraper.py -t $TAXON_ID -s $PAGE_START -e $PAGE_END --upload-to-s3

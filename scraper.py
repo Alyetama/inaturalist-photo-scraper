@@ -26,14 +26,16 @@ class iNatPhotoScraper:
     def __init__(self,
                  taxon_id: int,
                  output_dir: Optional[str] = None,
-                 latest_page: int = 0,
-                 latest_uuid_index: int = 0,
+                 resume_from_page: int = 0,
+                 stop_at_page: Optional[int] = None, 
+                 resume_from_uuid_index: int = 0,
                  upload_to_s3: bool = True):
         super(iNatPhotoScraper, self).__init__()
         self.taxon_id = taxon_id
         self.output_dir = output_dir
-        self.latest_page = latest_page
-        self.latest_uuid_index = latest_uuid_index
+        self.resume_from_page = resume_from_page
+        self.stop_at_page = stop_at_page
+        self.resume_from_uuid_index = resume_from_uuid_index
         self.upload_to_s3 = upload_to_s3
         self.logger = self._logger()
         self.s3 = self._s3_client()
@@ -68,9 +70,9 @@ class iNatPhotoScraper:
         return logger
 
     def _keyboard_interrupt_handler(self, sig: int, _) -> None:
-        self.logger.info(f'>>>>>>>>>> Latest page: {self.latest_page}')
+        self.logger.info(f'>>>>>>>>>> Latest page: {self.resume_from_page}')
         self.logger.info(
-            f'>>>>>>>>>> Latest UUID index: {self.latest_uuid_index}')
+            f'>>>>>>>>>> Latest UUID index: {self.resume_from_uuid_index}')
         self.logger.warning(
             f'Failed observations: {self.data["failed_observations"]}')
         self.logger.warning(
@@ -194,21 +196,23 @@ class iNatPhotoScraper:
         self.logger.info(
             f'Estimated number of observations: {num_pages * 200}')
 
-        pages_range = pages_range[self.latest_page:]
+        pages_range = pages_range[self.resume_from_page:]
 
         for page in pages_range:
+            if page == self.stop_at_page:
+                break
             self.logger.info(f'Current page: {page}')
-            self.latest_page = page
+            self.resume_from_page = page
             uuids = self.get_observations_uuids(page)
             if uuids in self.data['uuids']:
                 self.logger.warning(f'Duplicate response in page {page}! '
                                     'Skipping...')
                 continue
             self.data['uuids'] += uuids
-            uuids = uuids[self.latest_uuid_index:]
+            uuids = uuids[self.resume_from_uuid_index:]
 
-            for n, _uuid in enumerate(uuids, start=self.latest_uuid_index):
-                self.latest_uuid_index = n
+            for n, _uuid in enumerate(uuids, start=self.resume_from_uuid_index):
+                self.resume_from_uuid_index = n
                 self.logger.debug(f'Page: {page}, UUID index: {n}')
                 self.download_photos(_uuid)
 
@@ -224,18 +228,21 @@ def _opts() -> argparse.Namespace:
                         '--output-dir',
                         help='Output directory',
                         type=str)
-    parser.add_argument('-p',
-                        '--latest-page',
+    parser.add_argument('-s',
+                        '--resume-from-page',
                         help='Page to resume from',
                         type=int,
                         default=0)
+    parser.add_argument('-e',
+                        '--stop-at-page',
+                        help='Page to stop at',
+                        type=int)
     parser.add_argument('-u',
-                        '--latest-uuid-index',
+                        '--resume-from-uuid-index',
                         help='UUID index to resume from',
                         type=int,
                         default=0)
-    parser.add_argument('-s',
-                        '--upload-to-s3',
+    parser.add_argument('--upload-to-s3',
                         help='Upload to a S3-compatible bucket',
                         action='store_true')
     return parser.parse_args()
@@ -246,7 +253,8 @@ if __name__ == '__main__':
     args = _opts()
     scraper = iNatPhotoScraper(taxon_id=args.taxon_id,
                                output_dir=args.output_dir,
-                               latest_page=args.latest_page,
-                               latest_uuid_index=args.latest_uuid_index,
+                               resume_from_page=args.resume_from_page,
+                               stop_at_page=args.stop_at_page,
+                               resume_from_uuid_index=args.resume_from_uuid_index,
                                upload_to_s3=args.upload_to_s3)
     scraper.run()
