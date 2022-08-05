@@ -20,11 +20,12 @@ from loguru import logger
 from minio import Minio
 from minio.error import InvalidResponseError
 from minio.error import S3Error
+from requests import Response
 from requests.exceptions import HTTPError, JSONDecodeError
 from requests.structures import CaseInsensitiveDict
 
 
-class iNatPhotoScraper:
+class InaturalistPhotoScraper:
 
     def __init__(self,
                  taxon_id: int,
@@ -34,7 +35,7 @@ class iNatPhotoScraper:
                  resume_from_uuid_index: int = 0,
                  upload_to_s3: bool = True,
                  one_page_only: bool = True):
-        super(iNatPhotoScraper, self).__init__()
+        super(InaturalistPhotoScraper, self).__init__()
         self.taxon_id = taxon_id
         self.output_dir = output_dir
         self.resume_from_page = resume_from_page
@@ -51,16 +52,26 @@ class iNatPhotoScraper:
             'failed_downloads': []
         }
 
-    def _s3_client(self):
+    def _s3_client(self) -> Optional[Minio]:
+        """Returns a Minio client instance.
+
+        Returns:
+            Minio: Minio client instance.
+        """
         s3_client = None
         if self.upload_to_s3:
-            s3_endpoint = re.sub(r'https?:\/\/', '', os.environ['S3_ENDPOINT'])
+            s3_endpoint = re.sub(r'https?://', '', os.environ['S3_ENDPOINT'])
             s3_client = Minio(s3_endpoint,
                               access_key=os.environ['S3_ACCESS_KEY'],
                               secret_key=os.environ['S3_SECRET_KEY'])
         return s3_client
 
-    def _logger(self):
+    def _logger(self) -> logger:
+        """Returns a logger instance.
+
+        Returns:
+            logger: Logger instance.
+        """
         logger.remove()
         Path('logs').mkdir(exist_ok=True)
         logger.add(
@@ -75,6 +86,12 @@ class iNatPhotoScraper:
         return logger
 
     def _keyboard_interrupt_handler(self, sig: int, _) -> None:
+        """Handles keyboard interrupt.
+
+        Args:
+            sig (int): Signal number.
+            _ (): Unused.
+        """
         self.logger.info(f'>>>>>>>>>> Latest page: {self.resume_from_page}')
         self.logger.info(
             f'>>>>>>>>>> Latest UUID index: {self.resume_from_uuid_index}')
@@ -89,6 +106,14 @@ class iNatPhotoScraper:
 
     @staticmethod
     def _encode_params(params: dict) -> str:
+        """Encodes parameters for GET request.
+
+        Args:
+            params (dict): Parameters to encode.
+
+        Returns:
+            str: Encoded parameters.
+        """
         return '&'.join(
             [f'{k}={urllib.parse.quote(str(v))}' for k, v in params.items()])
 
@@ -96,7 +121,18 @@ class iNatPhotoScraper:
                      url: str,
                      params: Optional[dict] = None,
                      as_json: bool = True,
-                     **kwargs):
+                     **kwargs) -> Union[Response, dict, None]:
+        """Returns a GET request.
+
+        Args:
+            url (str): URL to request.
+            params (dict, optional): Parameters to send.
+            as_json (bool, optional): Whether to return JSON or not.
+            **kwargs: Additional arguments to pass to requests.get().
+
+        Returns:
+            Union[Response, dict, None]: Response object or JSON object.
+        """
         headers = CaseInsensitiveDict()
         headers['accept'] = 'application/json'
 
@@ -119,7 +155,12 @@ class iNatPhotoScraper:
         finally:
             time.sleep(1)
 
-    def _get_num_pages(self):
+    def _get_num_pages(self) -> int:
+        """Returns the number of pages.
+
+        Returns:
+            int: Number of pages.
+        """
         url = 'https://api.inaturalist.org/v2/observations'
         params = {'taxon_id': self.taxon_id}
         r = self._get_request(url, params=params)
@@ -128,7 +169,15 @@ class iNatPhotoScraper:
         total_results = r['total_results']
         return total_results // 200 + 1
 
-    def get_observations_uuids(self, page: int) -> list:
+    def get_observations_uuids(self, page: int) -> Optional[list]:
+        """Returns a list of observation UUIDs.
+
+        Args:
+            page (int): Page number.
+
+        Returns:
+            list: List of observation UUIDs, or `None` if the request failed.
+        """
         url = 'https://api.inaturalist.org/v2/observations'
         params = {
             'taxon_id': self.taxon_id,
@@ -147,7 +196,16 @@ class iNatPhotoScraper:
         uuids = [x['uuid'] for x in resp_json['results']]
         return uuids
 
-    def _download_photos(self, _uuid):
+    def _download_photos(self, _uuid) -> Optional[bool]:
+        """Downloads photos for a given observation.
+
+        Args:
+            _uuid (str): Observation UUID.
+
+        Returns:
+            bool: Whether the download was successful or not. None if the
+                request failed.
+        """
         url = f'https://www.inaturalist.org/observations/{_uuid}.json'
         self.logger.debug(f'({_uuid}) Requesting observation')
 
@@ -173,8 +231,6 @@ class iNatPhotoScraper:
 
             r = self._get_request(photo_url, as_json=False)
             if not r:
-                self.logger.error(
-                    f'Could not download {photo_url}! (ERROR: {e})')
                 self.data['failed_downloads'].append(photo_url)
                 continue
 
@@ -182,9 +238,9 @@ class iNatPhotoScraper:
 
             if self.upload_to_s3:
                 try:
-                    object = self.s3.get_object(os.environ['S3_BUCKET_NAME'],
-                                                fname)
-                    object_etag = object.info()['Etag'].strip('"')
+                    s3_object = self.s3.get_object(
+                        os.environ['S3_BUCKET_NAME'], fname)
+                    object_etag = s3_object.info()['Etag'].strip('"')
                     if Path(fname).stem == object_etag:
                         logger.warning(
                             'File already exists in the bucket! Skipping...')
@@ -208,14 +264,25 @@ class iNatPhotoScraper:
 
     def check_progress(self,
                        page: Union[int, str],
-                       mark_as_complete: bool = False):
+                       mark_as_complete: bool = False) -> Optional[int]:
+        """Checks the progress of the download.
+
+        Args:
+            page (int): Page number.
+            mark_as_complete (bool, optional): Whether to mark the page as
+                complete or not.
+
+        Returns:
+            int: Returns 1 if the page is complete or in-progress, and None if
+            `mark_as_complete` is `True` or page is pending.
+        """
         page = str(page)
         progress_fname = f'{self.taxon_id}_progress.json'
 
         if mark_as_complete:
-            progress = json.loads(
-                self.s3.get_object(os.environ['S3_LOGS_BUCKET_NAME'],
-                                   progress_fname).decode())
+            progress_raw = self.s3.get_object(
+                os.environ['S3_LOGS_BUCKET_NAME'], progress_fname)
+            progress = json.loads(progress_raw.read().decode())
             progress[page] = 'complete'
             return
 
@@ -259,7 +326,35 @@ class iNatPhotoScraper:
                            part_size=10 * 1024 * 1024,
                            content_type='application/json')
 
-    def run(self):
+    def _dump_logs(self, page) -> None:
+        """Dumps the logs to S3.
+
+        Args:
+            page (int): Page number.
+        """
+        if self.one_page_only:
+            logs_fname = f'{self.taxon_id}_page{self.resume_from_page}.json'
+        else:
+            logs_fname = f'{self.taxon_id}_{time.time()}.json'
+
+        if self.data['failed_observations'] or self.data['failed_downloads']:
+            logger.warning(
+                'Some or all of the downloads failed! Uploading logs...')
+            failed = {
+                'failed_observations': self.data['failed_observations'],
+                'failed_downloads': self.data['failed_downloads']
+            }
+            failed = json.dumps(failed).encode()
+            self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
+                               logs_fname,
+                               io.BytesIO(failed),
+                               content_type='application/json',
+                               length=-1,
+                               part_size=10 * 1024 * 1024)
+        self.check_progress(page, mark_as_complete=True)
+
+    def run(self) -> None:
+        """Runs the scraper."""
         signal.signal(signal.SIGINT, self._keyboard_interrupt_handler)
 
         if not self.output_dir:
@@ -309,37 +404,17 @@ class iNatPhotoScraper:
                                       start=self.resume_from_uuid_index):
                 self.resume_from_uuid_index = n
                 self.logger.debug(f'Page: {page}, UUID index: {n}')
-                res = self._download_photos(_uuid)
+                self._download_photos(_uuid)
 
             if self.one_page_only:
                 break
 
-        if os.getenv('S3_LOGS_BUCKET_NAME'):
-            if self.one_page_only:
-                logs_fname = f'{self.taxon_id}_page{page}.json'
-            else:
-                logs_fname = f'{self.taxon_id}_{time.time()}.json'
-
-            if self.data['failed_observations'] or self.data[
-                    'failed_downloads']:
-                logger.warning(
-                    'Some or all of the downloads failed! Uploading logs...')
-                failed = {
-                    'failed_observations': self.data['failed_observations'],
-                    'failed_downloads': self.data['failed_downloads']
-                }
-                failed = json.dumps(failed).encode()
-                self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
-                                   logs_fname,
-                                   io.BytesIO(failed),
-                                   content_type='application/json',
-                                   length=-1,
-                                   part_size=10 * 1024 * 1024)
-
-            self.check_progress(page, mark_as_complete=True)
+            if os.getenv('S3_LOGS_BUCKET_NAME'):
+                self._dump_logs(page)
 
 
 def _opts() -> argparse.Namespace:
+    """Parses command line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument('-t',
                         '--taxon-id',
@@ -376,11 +451,12 @@ def _opts() -> argparse.Namespace:
 if __name__ == '__main__':
     load_dotenv()
     args = _opts()
-    scraper = iNatPhotoScraper(
+    scraper = InaturalistPhotoScraper(
         taxon_id=args.taxon_id,
         output_dir=args.output_dir,
         resume_from_page=args.resume_from_page,
         stop_at_page=args.stop_at_page,
         resume_from_uuid_index=args.resume_from_uuid_index,
-        upload_to_s3=args.upload_to_s3)
+        upload_to_s3=args.upload_to_s3,
+        one_page_only=args.one_page_only)
     scraper.run()
