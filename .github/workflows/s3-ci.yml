@@ -7,6 +7,10 @@ on:
         description: 'Array of page numbers to process'
         required: true
         default: '[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]'
+      taxonId:
+        description: 'Taxon ID'
+      bucketName:
+        description: 'S3 bucket name'
 
 jobs:
   provide_pages_array:
@@ -21,27 +25,47 @@ jobs:
   ci:
     needs: provide_pages_array
     runs-on: ubuntu-latest
+
     strategy:
       fail-fast: false
       matrix:
         page: ${{ fromJson(needs.provide_pages_array.outputs.matrix) }}
+
     steps:
       - uses: actions/checkout@v3
+
+      - name: taxon ID is provided as an input
+        if: ${{ github.event.inputs.taxonId != '' }}
+        run: echo "TAXON_ID=${{ github.event.inputs.taxonId }}" >> $GITHUB_ENV
+      - name: taxon ID is provided as a secret
+        if: ${{ github.event.inputs.taxonId == '' }}
+        run: echo "TAXON_ID=${{ secrets.TAXON_ID }}" >> $GITHUB_ENV
+
+      - name: S3 bucket name is provided as an input
+        if: ${{ github.event.inputs.bucketName != '' }}
+        run: echo "S3_BUCKET_NAME=${{ github.event.inputs.bucketName }}" >> $GITHUB_ENV
+      - name: S3 bucket name is provided as a secret
+        if: ${{ github.event.inputs.bucketName == '' }}
+        run: echo "S3_BUCKET_NAME=${{ secrets.S3_BUCKET_NAME }}" >> $GITHUB_ENV
+
       - name: Set up Python 3.9
         uses: actions/setup-python@v3
         with:
           python-version: "3.9"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
       - name: Run scraper
         env:
           S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
           S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
           S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
-          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
-          TAXON_ID: ${{ secrets.TAXON_ID }}
+          S3_LOGS_BUCKET_NAME: ${{ secrets.S3_LOGS_BUCKET_NAME }}
+          S3_BUCKET_NAME: ${{ env.S3_BUCKET_NAME }}
+          TAXON_ID: ${{ env.TAXON_ID }}
           PAGE: ${{ matrix.page }}
         run: |
           python scraper.py -t $TAXON_ID -s $PAGE --upload-to-s3 --one-page-only
