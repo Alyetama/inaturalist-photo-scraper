@@ -34,7 +34,7 @@ class InaturalistPhotoScraper:
                  stop_at_page: Optional[int] = None,
                  resume_from_uuid_index: int = 0,
                  upload_to_s3: bool = True,
-                 one_page_only: bool = True):
+                 one_page_only: bool = False):
         super(InaturalistPhotoScraper, self).__init__()
         self.taxon_id = taxon_id
         self.output_dir = output_dir
@@ -379,8 +379,10 @@ class InaturalistPhotoScraper:
             self.logger.info(f'Current page: {page}')
 
             if os.getenv('S3_LOGS_BUCKET_NAME'):
-                current_progress = self.check_progress(page)
-                if current_progress == 1:
+                progress_status = self.check_progress(page)
+                if progress_status == 1:
+                    if self.one_page_only:
+                        break
                     continue
 
             self.resume_from_page = page
