@@ -2,6 +2,11 @@ name: S3 CI
 
 on:
   workflow_dispatch:
+    inputs:
+      pages:
+        description: 'Array of page numbers to process'
+        required: true
+        default: '[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]'
 
 jobs:
   provide_pages_array:
@@ -9,18 +14,17 @@ jobs:
 
     steps:
       - id: set-matrix
-        env:
-          PAGES_ARRAY: ${{ secrets.PAGES_ARRAY }}
-        run: echo "::set-output name=matrix::$PAGES_ARRAY"
-      outputs:
-          matrix: ${{ steps.set-matrix.outputs.matrix }}
+        run: echo "::set-output name=matrix::${{ github.event.inputs.pages }}"
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
 
   ci:
+    needs: provide_pages_array
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        page: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # page 0 to 9
+        page: ${{ fromJson(needs.provide_pages_array.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python 3.9

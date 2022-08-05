@@ -12,13 +12,14 @@ import sys
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import requests
 from dotenv import load_dotenv
 from loguru import logger
 from minio import Minio
 from minio.error import InvalidResponseError
+from minio.error import S3Error
 from requests.exceptions import HTTPError, JSONDecodeError
 from requests.structures import CaseInsensitiveDict
 
@@ -123,7 +124,7 @@ class iNatPhotoScraper:
         params = {'taxon_id': self.taxon_id}
         r = self._get_request(url, params=params)
         if not r:
-            sys.exit('Failed to ger number of pages!')
+            sys.exit('Failed to get number of pages!')
         total_results = r['total_results']
         return total_results // 200 + 1
 
@@ -146,7 +147,7 @@ class iNatPhotoScraper:
         uuids = [x['uuid'] for x in resp_json['results']]
         return uuids
 
-    def download_photos(self, _uuid):
+    def _download_photos(self, _uuid):
         url = f'https://www.inaturalist.org/observations/{_uuid}.json'
         self.logger.debug(f'({_uuid}) Requesting observation')
 
@@ -181,6 +182,17 @@ class iNatPhotoScraper:
 
             if self.upload_to_s3:
                 try:
+                    object = self.s3.get_object(os.environ['S3_BUCKET_NAME'],
+                                                fname)
+                    object_etag = object.info()['Etag'].strip('"')
+                    if Path(fname).stem == object_etag:
+                        logger.warning(
+                            'File already exists in the bucket! Skipping...')
+                        return True
+                except S3Error:
+                    pass
+
+                try:
                     self.s3.put_object(os.environ['S3_BUCKET_NAME'],
                                        fname,
                                        io.BytesIO(r.content),
@@ -193,6 +205,59 @@ class iNatPhotoScraper:
                     f.write(r.content)
             self.logger.debug(f'({photo_uuid}) ✅ Downloaded')
         return True
+
+    def check_progress(self,
+                       page: Union[int, str],
+                       mark_as_complete: bool = False):
+        page = str(page)
+        progress_fname = f'{self.taxon_id}_progress.json'
+
+        if mark_as_complete:
+            progress = json.loads(
+                self.s3.get_object(os.environ['S3_LOGS_BUCKET_NAME'],
+                                   progress_fname).decode())
+            progress[page] = 'complete'
+            return
+
+        logs_objects = self.s3.list_objects(os.environ['S3_LOGS_BUCKET_NAME'])
+        progress_exists = [
+            x for x in logs_objects if x.object_name == progress_fname
+        ]
+        if not progress_exists:
+            logger.info(
+                f'Writing progress file for {self.taxon_id} for the first '
+                'time...')
+            num_pages = self._get_num_pages()
+            progress = {str(k): 'pending' for k in range(num_pages)}
+            encoded_json = json.dumps(progress).encode()
+            self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
+                               progress_fname,
+                               io.BytesIO(encoded_json),
+                               length=-1,
+                               part_size=10 * 1024 * 1024,
+                               content_type='application/json')
+
+        progress_raw = self.s3.get_object(os.environ['S3_LOGS_BUCKET_NAME'],
+                                          progress_fname)
+        progress = json.loads(progress_raw.read().decode())
+
+        if progress[page] == 'complete':
+            logger.warning(f'Page {page} is already complete!')
+            return 1
+        elif progress[page] == 'in-progress':
+            logger.warning(f'Page {page} is already in-progress!')
+            return 1
+        else:
+            logger.info(f'Adding in-progress status to page {page}...')
+            progress[page] = 'in-progress'
+
+        encoded_json = json.dumps(progress).encode()
+        self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
+                           progress_fname,
+                           io.BytesIO(encoded_json),
+                           length=-1,
+                           part_size=10 * 1024 * 1024,
+                           content_type='application/json')
 
     def run(self):
         signal.signal(signal.SIGINT, self._keyboard_interrupt_handler)
@@ -212,9 +277,17 @@ class iNatPhotoScraper:
         pages_range = pages_range[self.resume_from_page:]
 
         for page in pages_range:
+
             if page == self.stop_at_page:
                 break
+
             self.logger.info(f'Current page: {page}')
+
+            if os.getenv('S3_LOGS_BUCKET_NAME'):
+                current_progress = self.check_progress(page)
+                if current_progress == 1:
+                    continue
+
             self.resume_from_page = page
             uuids = self.get_observations_uuids(page)
 
@@ -236,7 +309,7 @@ class iNatPhotoScraper:
                                       start=self.resume_from_uuid_index):
                 self.resume_from_uuid_index = n
                 self.logger.debug(f'Page: {page}, UUID index: {n}')
-                res = self.download_photos(_uuid)
+                res = self._download_photos(_uuid)
 
             if self.one_page_only:
                 break
@@ -262,6 +335,8 @@ class iNatPhotoScraper:
                                    content_type='application/json',
                                    length=-1,
                                    part_size=10 * 1024 * 1024)
+
+            self.check_progress(page, mark_as_complete=True)
 
 
 def _opts() -> argparse.Namespace:
