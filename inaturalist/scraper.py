@@ -193,6 +193,18 @@ class InaturalistPhotoScraper:
         uuids = [x['uuid'] for x in resp_json['results']]
         return uuids
 
+    def _put_object(self,
+                    bucket_name,
+                    object_name,
+                    data,
+                    content_type: str = 'application/octet-stream'):
+        return self.s3.put_object(bucket_name,
+                                  object_name,
+                                  io.BytesIO(data),
+                                  length=-1,
+                                  part_size=10 * 1024 * 1024,
+                                  content_type=content_type)
+
     def download_photos(self, observation_uuid) -> Optional[bool]:
         """Downloads photos for a given observation.
 
@@ -246,11 +258,7 @@ class InaturalistPhotoScraper:
                     pass
 
                 try:
-                    self.s3.put_object(os.environ['S3_BUCKET_NAME'],
-                                       fname,
-                                       io.BytesIO(r.content),
-                                       length=-1,
-                                       part_size=10 * 1024 * 1024)
+                    self._put_object(os.environ['S3_BUCKET_NAME'], fname, data)
                 except InvalidResponseError:
                     self.data['failed_downloads'].append(photo)
             else:
@@ -281,6 +289,9 @@ class InaturalistPhotoScraper:
                 os.environ['S3_LOGS_BUCKET_NAME'], progress_fname)
             progress = json.loads(progress_raw.read().decode())
             progress[page] = 'complete'
+            encoded_json = json.dumps(progress).encode()
+            self._put_object(os.environ['S3_LOGS_BUCKET_NAME'], progress_fname,
+                             encoded_json, 'application/json')
             return
 
         logs_objects = self.s3.list_objects(os.environ['S3_LOGS_BUCKET_NAME'])
@@ -294,12 +305,8 @@ class InaturalistPhotoScraper:
             num_pages = self.get_num_pages()
             progress = {str(k): 'pending' for k in range(num_pages)}
             encoded_json = json.dumps(progress).encode()
-            self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
-                               progress_fname,
-                               io.BytesIO(encoded_json),
-                               length=-1,
-                               part_size=10 * 1024 * 1024,
-                               content_type='application/json')
+            self._put_object(os.environ['S3_LOGS_BUCKET_NAME'], progress_fname,
+                             encoded_json, 'application/json')
 
         progress_raw = self.s3.get_object(os.environ['S3_LOGS_BUCKET_NAME'],
                                           progress_fname)
@@ -316,12 +323,8 @@ class InaturalistPhotoScraper:
             progress[page] = 'in-progress'
 
         encoded_json = json.dumps(progress).encode()
-        self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
-                           progress_fname,
-                           io.BytesIO(encoded_json),
-                           length=-1,
-                           part_size=10 * 1024 * 1024,
-                           content_type='application/json')
+        self._put_object(os.environ['S3_LOGS_BUCKET_NAME'], progress_fname,
+                         encoded_json, 'application/json')
 
     def _dump_logs(self, page) -> None:
         """Dumps the logs to S3.
