@@ -16,8 +16,7 @@ from typing import Optional, Union
 import requests
 from loguru import logger
 from minio import Minio
-from minio.error import InvalidResponseError
-from minio.error import S3Error
+from minio.error import InvalidResponseError, S3Error
 from requests import Response
 from requests.exceptions import HTTPError, JSONDecodeError
 from requests.structures import CaseInsensitiveDict
@@ -153,7 +152,7 @@ class InaturalistPhotoScraper:
         finally:
             time.sleep(1)
 
-    def _get_num_pages(self) -> int:
+    def get_num_pages(self) -> int:
         """Returns the number of pages.
 
         Returns:
@@ -194,28 +193,28 @@ class InaturalistPhotoScraper:
         uuids = [x['uuid'] for x in resp_json['results']]
         return uuids
 
-    def _download_photos(self, _uuid) -> Optional[bool]:
+    def download_photos(self, observation_uuid) -> Optional[bool]:
         """Downloads photos for a given observation.
 
         Args:
-            _uuid (str): Observation UUID.
+            observation_uuid (str): Observation UUID.
 
         Returns:
             bool: Whether the download was successful or not. None if the
                 request failed.
         """
-        url = f'https://www.inaturalist.org/observations/{_uuid}.json'
-        self.logger.debug(f'({_uuid}) Requesting observation')
+        url = f'https://www.inaturalist.org/observations/{observation_uuid}.json'  # noqa E501
+        self.logger.debug(f'({observation_uuid}) Requesting observation')
 
         observation = self._get_request(url, allow_redirects=True)
         if not observation:
-            self.data['failed_observations'].append(_uuid)
+            self.data['failed_observations'].append(observation_uuid)
             return
 
         self.data['observations'].append(observation)
         observation_photos = observation['observation_photos']
         if not observation_photos:
-            self.logger.debug(f'({_uuid}) No photos... Skipping...')
+            self.logger.debug(f'({observation_uuid}) No photos... Skipping...')
             return
 
         for photo in observation_photos:
@@ -292,7 +291,7 @@ class InaturalistPhotoScraper:
             logger.info(
                 f'Writing progress file for {self.taxon_id} for the first '
                 'time...')
-            num_pages = self._get_num_pages()
+            num_pages = self.get_num_pages()
             progress = {str(k): 'pending' for k in range(num_pages)}
             encoded_json = json.dumps(progress).encode()
             self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
@@ -361,7 +360,7 @@ class InaturalistPhotoScraper:
         if not self.upload_to_s3:
             Path(self.output_dir).mkdir(exist_ok=True, parents=True)
 
-        num_pages = self._get_num_pages()
+        num_pages = self.get_num_pages()
         pages_range = range(num_pages)
         self.logger.info(f'Number of pages: {num_pages}')
         self.logger.info(
@@ -404,7 +403,7 @@ class InaturalistPhotoScraper:
                                       start=self.resume_from_uuid_index):
                 self.resume_from_uuid_index = n
                 self.logger.debug(f'Page: {page}, UUID index: {n}')
-                self._download_photos(_uuid)
+                self.download_photos(_uuid)
 
             if self.one_page_only:
                 break
