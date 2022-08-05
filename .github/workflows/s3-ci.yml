@@ -2,9 +2,19 @@ name: S3 CI
 
 on:
   workflow_dispatch:
-  push:
 
 jobs:
+  provide_pages_array:
+    runs-on: ubuntu-latest
+
+    steps:
+      - id: set-matrix
+        env:
+          PAGES_ARRAY: ${{ secrets.PAGES_ARRAY }}
+        run: echo "::set-output name=matrix::$PAGES_ARRAY"
+      outputs:
+          matrix: ${{ steps.set-matrix.outputs.matrix }}
+
   ci:
     runs-on: ubuntu-latest
     strategy:

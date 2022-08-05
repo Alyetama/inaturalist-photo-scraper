@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import io
+import json
 import os
 import re
 import signal
@@ -239,6 +240,28 @@ class iNatPhotoScraper:
 
             if self.one_page_only:
                 break
+
+        if os.getenv('S3_LOGS_BUCKET_NAME'):
+            if self.one_page_only:
+                logs_fname = f'{self.taxon_id}_page{page}.json'
+            else:
+                logs_fname = f'{self.taxon_id}_{time.time()}.json'
+
+            if self.data['failed_observations'] or self.data[
+                    'failed_downloads']:
+                logger.warning(
+                    'Some or all of the downloads failed! Uploading logs...')
+                failed = {
+                    'failed_observations': self.data['failed_observations'],
+                    'failed_downloads': self.data['failed_downloads']
+                }
+                failed = json.dumps(failed).encode()
+                self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
+                                   logs_fname,
+                                   io.BytesIO(failed),
+                                   content_type='application/json',
+                                   length=-1,
+                                   part_size=10 * 1024 * 1024)
 
 
 def _opts() -> argparse.Namespace:
