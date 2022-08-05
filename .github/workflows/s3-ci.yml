@@ -68,4 +68,4 @@ jobs:
           TAXON_ID: ${{ env.TAXON_ID }}
           PAGE: ${{ matrix.page }}
         run: |
-          inaturalist -t $TAXON_ID -p $PAGE --upload-to-s3 --one-page-only
+          inat -t $TAXON_ID -p $PAGE --upload-to-s3 --one-page-only
