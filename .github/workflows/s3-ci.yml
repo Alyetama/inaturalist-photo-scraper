@@ -7,29 +7,39 @@ on:
         description: 'Array of page numbers to process'
         required: true
         default: '[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]'
+      years:
+        description: 'Array of years to process'
+        required: false
+        default: '[2022]'
       taxonId:
         description: 'Taxon ID'
+        required: false
       bucketName:
         description: 'S3 bucket name'
+        required: false
 
 jobs:
-  provide_pages_array:
+  provide_matrices:
     runs-on: ubuntu-latest
-
     steps:
-      - id: set-matrix
-        run: echo "::set-output name=matrix::${{ github.event.inputs.pages }}"
+      - id: set-pages
+        run: echo "::set-output name=pages::${{ github.event.inputs.pages }}"
+      - id: set-years
+        run: echo "::set-output name=years::${{ github.event.inputs.years }}"
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      pages: ${{ steps.set-pages.outputs.pages }}
+      years: ${{ steps.set-years.outputs.years }}
+
 
   ci:
-    needs: provide_pages_array
+    needs: provide_matrices
     runs-on: ubuntu-latest
 
     strategy:
       fail-fast: false
       matrix:
-        page: ${{ fromJson(needs.provide_pages_array.outputs.matrix) }}
+        page: ${{ fromJson(needs.provide_matrices.outputs.pages) }}
+        yaer: ${{ fromJson(needs.provide_matrices.outputs.years) }}
 
     steps:
       - uses: actions/checkout@v3
@@ -67,5 +77,9 @@ jobs:
           S3_BUCKET_NAME: ${{ env.S3_BUCKET_NAME }}
           TAXON_ID: ${{ env.TAXON_ID }}
           PAGE: ${{ matrix.page }}
+          YEAR: ${{ matrix.year }}
         run: |
-          inat -t $TAXON_ID -p $PAGE --upload-to-s3 --one-page-only
+          inat -t $TAXON_ID \
+            --resume-from-page $PAGE \
+            --start-year $YEAR \
+            --upload-to-s3 --one-page-only --one-year-only

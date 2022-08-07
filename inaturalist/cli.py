@@ -2,6 +2,7 @@
 # coding: utf-8
 
 import argparse
+import json
 
 from dotenv import load_dotenv
 from inaturalist.scraper import InaturalistPhotoScraper
@@ -56,6 +57,13 @@ def _opts() -> argparse.Namespace:
                         help='Year to stop at '
                         '(only relevant when number of observations > 10,000)',
                         type=int)
+    parser.add_argument('-Y',
+                        '--one-year-only',
+                        help='Terminate after completing a single year',
+                        action='store_true')
+    parser.add_argument('--get-current-progress',
+                        help='Get current progress',
+                        action='store_true')
     return parser.parse_args()
 
 
@@ -72,8 +80,14 @@ def main() -> None:
         one_page_only=args.one_page_only,
         results_per_page=args.results_per_page,
         start_year=args.start_year,
-        end_year=args.end_year)
-    scraper.run()
+        end_year=args.end_year,
+        one_year_only=args.one_year_only)
+
+    if args.get_current_progress:
+        progress = scraper.get_progress_data(f'{args.taxon_id}_progress.json')
+        print(json.dumps(progress, indent=4))
+    else:
+        scraper.run()
 
 
 if __name__ == '__main__':
