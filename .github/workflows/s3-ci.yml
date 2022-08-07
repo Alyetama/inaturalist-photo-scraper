@@ -39,7 +39,7 @@ jobs:
       fail-fast: false
       matrix:
         page: ${{ fromJson(needs.provide_matrices.outputs.pages) }}
-        yaer: ${{ fromJson(needs.provide_matrices.outputs.years) }}
+        year: ${{ fromJson(needs.provide_matrices.outputs.years) }}
 
     steps:
       - uses: actions/checkout@v3

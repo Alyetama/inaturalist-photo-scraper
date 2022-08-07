@@ -575,8 +575,6 @@ class InaturalistPhotoScraper:
                 f'Will iterate year by year starting from {self.start_year}')
 
             for year in range(self.start_year, self.end_year + 1):
-                if year == self.end_year:
-                    break
                 num_pages, num_observations = self.get_num_pages(on_year=year)
                 logger.info(f'Number of pages for {year}: {num_pages}')
                 logger.info(
