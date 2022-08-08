@@ -319,7 +319,7 @@ class InaturalistPhotoScraper:
                     str(k): 'pending'
                     for k in range(num_pages + 1)
                 }
-                progress[year] = progress_per_page
+                progress[str(year)] = progress_per_page
         else:
             num_pages, _ = self.get_num_pages()
             progress = {str(k): 'pending' for k in range(num_pages)}
