@@ -74,6 +74,7 @@ jobs:
           S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
           S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
           S3_LOGS_BUCKET_NAME: ${{ secrets.S3_LOGS_BUCKET_NAME }}
+          MONGODB_CONNECTION_STRING: ${{ secrets.MONGODB_CONNECTION_STRING }}
           S3_BUCKET_NAME: ${{ env.S3_BUCKET_NAME }}
           TAXON_ID: ${{ env.TAXON_ID }}
           PAGE: ${{ matrix.page }}

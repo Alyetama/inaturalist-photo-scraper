@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
+import pymongo
 import requests
 from loguru import logger
 from minio import Minio
@@ -72,6 +73,11 @@ class InaturalistPhotoScraper:
                               access_key=os.environ['S3_ACCESS_KEY'],
                               secret_key=os.environ['S3_SECRET_KEY'])
         return s3_client
+
+    @staticmethod
+    def _progress_db():
+        client = pymongo.MongoClient(os.environ['MONGODB_CONNECTION_STRING'])
+        return client.inat_progress['inat_progress']
 
     def _logger(self) -> logger:
         """Returns a logger instance.
@@ -293,17 +299,14 @@ class InaturalistPhotoScraper:
             logger.debug(f'({photo_uuid}) ✅ Downloaded')
         return True
 
-    def _write_progress_file(self,
-                             progress_fname: str,
-                             by_year: bool = False) -> None:
-        """Writes the progress file.
+    def _write_progress_collection(self, by_year: bool = False) -> None:
+        """Writes the progress collection.
 
         Args:
-            progress_fname (str): Progress file name.
             by_year (bool, optional): Whether to write the progress file by
                 year.
         """
-        logger.info(f'Writing progress file for {self.taxon_id} for the first '
+        logger.info(f'Writing progress for {self.taxon_id} for the first '
                     'time...')
         if by_year:
             progress = {}
@@ -321,54 +324,8 @@ class InaturalistPhotoScraper:
             num_pages, _ = self.get_num_pages()
             progress = {str(k): 'pending' for k in range(num_pages)}
 
-        encoded_json = json.dumps(progress).encode()
-        if self.upload_to_s3:
-            self._put_object(os.environ['S3_LOGS_BUCKET_NAME'], progress_fname,
-                             encoded_json, 'application/json')
-        else:
-            with open(Path(progress_fname), 'wb') as f:
-                f.write(encoded_json)
-
-    def get_progress_data(self, progress_fname):
-        """Returns the progress data.
-
-        Args:
-            progress_fname (str): Progress file name.
-        """
-        if self.upload_to_s3:
-            try:
-                progress_raw = self.s3.get_object(
-                    os.environ['S3_LOGS_BUCKET_NAME'], progress_fname).read()
-            except S3Error as e:
-                logger.error(e)
-                return
-        else:
-            if not Path(progress_fname).exists():
-                logger.error('Progress file does not exist!')
-                return
-            progress_raw = Path(progress_fname).read_bytes()
-        return json.loads(progress_raw.decode())
-
-    def _mark_as_complete(self,
-                          progress_fname: str,
-                          page: str,
-                          year: Optional[str] = None):
-        if self.upload_to_s3:
-            progress_raw = self.s3.get_object(
-                os.environ['S3_LOGS_BUCKET_NAME'], progress_fname)
-        else:
-            progress_raw = Path(progress_fname).read_bytes()
-        progress = json.loads(progress_raw.read().decode())
-        if year:
-            progress[year][page] = 'complete'
-        else:
-            progress[page] = 'complete'
-        encoded_json = json.dumps(progress).encode()
-        if self.upload_to_s3:
-            self._put_object(os.environ['S3_LOGS_BUCKET_NAME'], progress_fname,
-                             encoded_json, 'application/json')
-        else:
-            Path(progress_fname).write_bytes(encoded_json)
+        db = self._progress_db()
+        db.insert_one({'_id': self.taxon_id, 'progress': progress})
 
     def check_progress(self,
                        page: Union[int, str],
@@ -386,35 +343,32 @@ class InaturalistPhotoScraper:
         """
         page = str(page)
         year = str(self.start_year) if self.is_large_results else None
-        progress_fname = f'{self.taxon_id}_progress.json'
-        if not self.upload_to_s3:
-            progress_fname = f'{self.output_dir}/{progress_fname}'
 
-        if mark_as_complete:
-            self._mark_as_complete(progress_fname, page, year)
-            return
+        db = self._progress_db()
 
-        if self.upload_to_s3:
-            logs_objects = list(
-                self.s3.list_objects(os.environ['S3_LOGS_BUCKET_NAME']))
-            progress_exists = [
-                x for x in logs_objects if x.object_name == progress_fname
-            ]
-        else:
-            progress_exists = Path(progress_fname).exists()
-
-        if not progress_exists:
+        if not db.find_one({'_id': self.taxon_id}):
             if year:
-                self._write_progress_file(progress_fname, by_year=True)
+                self._write_progress_collection(by_year=True)
             else:
-                self._write_progress_file(progress_fname)
+                self._write_progress_collection()
 
-        progress = self.get_progress_data(progress_fname)
-
+        progress = db.find_one({'_id': self.taxon_id})['progress']
         if year:
             progress_key = progress[year][page]
         else:
             progress_key = progress[page]
+
+        if mark_as_complete:
+            db.update_one({'_id': self.taxon_id},
+                          {'$set': {
+                              'progress': progress
+                          }})
+            if year:
+                progress[year][page] = 'complete'
+            else:
+                progress[page] = 'complete'
+            logger.info(f'Marking page {page} as complete!')
+            return
 
         if progress_key == 'complete':
             logger.warning(f'Page {page} is already complete!')
@@ -429,39 +383,7 @@ class InaturalistPhotoScraper:
             else:
                 progress[page] = 'in-progress'
 
-        encoded_json = json.dumps(progress).encode()
-        if self.upload_to_s3:
-            self._put_object(os.environ['S3_LOGS_BUCKET_NAME'], progress_fname,
-                             encoded_json, 'application/json')
-        else:
-            Path(progress_fname).write_bytes(encoded_json)
-
-    def _dump_logs(self, page) -> None:
-        """Dumps the logs to S3.
-
-        Args:
-            page (int): Page number.
-        """
-        if self.one_page_only:
-            logs_fname = f'{self.taxon_id}_page{self.resume_from_page}.json'
-        else:
-            logs_fname = f'{self.taxon_id}_{time.time()}.json'
-
-        if self.data['failed_observations'] or self.data['failed_downloads']:
-            logger.warning(
-                'Some or all of the downloads failed! Uploading logs...')
-            failed = {
-                'failed_observations': self.data['failed_observations'],
-                'failed_downloads': self.data['failed_downloads']
-            }
-            failed = json.dumps(failed).encode()
-            self.s3.put_object(os.environ['S3_LOGS_BUCKET_NAME'],
-                               logs_fname,
-                               io.BytesIO(failed),
-                               content_type='application/json',
-                               length=-1,
-                               part_size=10 * 1024 * 1024)
-        self.check_progress(page, mark_as_complete=True)
+        db.update_one({'_id': self.taxon_id}, {'$set': {'progress': progress}})
 
     def _get_date(self, sort: str) -> datetime:
         """Gets the datetime object from the current set of observations.
@@ -507,7 +429,7 @@ class InaturalistPhotoScraper:
         self.start_year = year
         self.resume_from_page = page
 
-        if os.getenv('S3_LOGS_BUCKET_NAME'):
+        if os.getenv('MONGODB_CONNECTION_STRING'):
             progress_status = self.check_progress(page)
             if progress_status == 1:
                 if self.one_page_only:
@@ -544,8 +466,8 @@ class InaturalistPhotoScraper:
         if self.one_page_only:
             return 1
 
-        if os.getenv('S3_LOGS_BUCKET_NAME'):
-            self._dump_logs(page)
+        if os.getenv('MONGODB_CONNECTION_STRING'):
+            self.check_progress(page, mark_as_complete=True)
 
     def run(self) -> None:
         """Runs the scraper."""
