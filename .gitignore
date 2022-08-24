@@ -192,4 +192,4 @@ logs/
 *.out
 downloaded_images_*/
 _ignore
-build.sh
+build

@@ -22,6 +22,7 @@ from minio.error import InvalidResponseError, S3Error
 from requests import Response
 from requests.exceptions import HTTPError, JSONDecodeError
 from requests.structures import CaseInsensitiveDict
+from tqdm import tqdm
 
 
 class InaturalistPhotoScraper:
@@ -37,7 +38,8 @@ class InaturalistPhotoScraper:
                  results_per_page: int = 200,
                  start_year: Optional[int] = 2008,
                  end_year: Optional[int] = None,
-                 one_year_only: bool = False):
+                 one_year_only: bool = False,
+                 check_multiple_buckets: Optional[list] = None):
         super(InaturalistPhotoScraper, self).__init__()
         self.taxon_id = taxon_id
         self.output_dir = output_dir
@@ -50,6 +52,7 @@ class InaturalistPhotoScraper:
         self.start_year = start_year
         self.end_year = end_year
         self.one_year_only = one_year_only
+        self.check_multiple_buckets = check_multiple_buckets
         self.s3 = self._s3_client()
         self._logger = self._logger()
         self.data = {
@@ -277,20 +280,27 @@ class InaturalistPhotoScraper:
             fname = hashlib.md5(r.content).hexdigest() + suffix
 
             if self.upload_to_s3:
-                try:
-                    s3_object = self.s3.get_object(
-                        os.environ['S3_BUCKET_NAME'], fname)
-                    object_etag = s3_object.info()['Etag'].strip('"')
-                    if Path(fname).stem == object_etag:
-                        logger.warning(
-                            'File already exists in the bucket! Skipping...')
-                        return True
-                except S3Error:
-                    pass
+                if self.check_multiple_buckets:
+                    buckets = [os.environ['S3_BUCKET_NAME']
+                               ] + self.check_multiple_buckets
+                else:
+                    buckets = [os.environ['S3_BUCKET_NAME']]
+
+                for bucket in buckets:
+                    try:
+                        s3_object = self.s3.get_object(bucket, fname)
+                        object_etag = s3_object.info()['Etag'].strip('"')
+                        if Path(fname).stem == object_etag:
+                            logger.warning(
+                                'File already exists in the bucket! Skipping...'
+                            )
+                            return True
+                    except S3Error:
+                        continue
 
                 try:
                     self._put_object(os.environ['S3_BUCKET_NAME'], fname,
-                                     json.dumps(self.data).encode())
+                                     r.content)
                 except InvalidResponseError:
                     self.data['failed_downloads'].append(photo)
             else:
@@ -299,33 +309,62 @@ class InaturalistPhotoScraper:
             logger.debug(f'({photo_uuid}) ✅ Downloaded')
         return True
 
-    def _write_progress_collection(self, by_year: bool = False) -> None:
-        """Writes the progress collection.
+    def write_progress(self) -> dict:
+        """Writes the progress collection."""
+        logger.info(f'Writing progress for taxon_id: {self.taxon_id}')
+        num_pages, num_observations = self.get_num_pages()
+        taxon_key = str(self.taxon_id)
 
-        Args:
-            by_year (bool, optional): Whether to write the progress file by
-                year.
-        """
-        logger.info(f'Writing progress for {self.taxon_id} for the first '
-                    'time...')
-        if by_year:
-            progress = {}
+        progress_file = Path.home() / 'inat_scraper_progress.json'
+        if progress_file.exists():
+            logger.info(f'Found an existing progress file: {progress_file}')
+            with open(progress_file) as j:
+                progress = json.load(j)
+        else:
+            logger.warning(
+                'Could not find an existing progress file. Writing progress '
+                '\for the first time...')
+            progress = {
+                taxon_key: {
+                    'observations': num_observations,
+                    'progress': {}
+                }
+            }
+
+        logger.info(
+            f'No. of page: {num_pages}. No. of observations: {num_observations}'
+        )
+
+        if num_observations > 10000:
+            logger.info(
+                'No. of observations > 10,000. Writing progress per year.page.'
+            )
+            progress[taxon_key]['parent_key'] = 'year'
             if not self.end_year:
                 self.end_year = datetime.now().year
-            year_range = range(self.start_year, self.end_year + 1)
-            for year in year_range:
+            for year in tqdm(range(self.start_year, self.end_year + 1)):
                 num_pages, _ = self.get_num_pages(on_year=year)
-                progress_per_page = {
+                progress[taxon_key]['progress'][str(year)] = {
                     str(k): 'pending'
                     for k in range(num_pages + 1)
                 }
-                progress[str(year)] = progress_per_page
         else:
-            num_pages, _ = self.get_num_pages()
-            progress = {str(k): 'pending' for k in range(num_pages)}
+            logger.info(
+                'No. of observations < 10,000. Writing progress per page.')
+            progress[taxon_key]['parent_key'] = 'page'
+            progress[taxon_key]['progress'] = {
+                str(k): 'pending'
+                for k in range(num_pages + 1)
+            }
 
-        db = self._progress_db()
-        db.insert_one({'_id': self.taxon_id, 'progress': progress})
+        if os.getenv('MONGODB_CONNECTION_STRING'):
+            db = self._progress_db()
+            db.insert_one(progress)
+        else:
+            with open(progress_file, 'w') as j:
+                json.dump(progress, j, indent=4)
+            logger.info(f'Wrote progress file to: {progress_file}')
+        return progress
 
     def check_progress(self,
                        page: Union[int, str],
@@ -471,6 +510,9 @@ class InaturalistPhotoScraper:
 
     def run(self) -> None:
         """Runs the scraper."""
+
+        self._write_progress_collection(by_year=True)
+
         signal.signal(signal.SIGINT, self._keyboard_interrupt_handler)
 
         if not self.output_dir:
