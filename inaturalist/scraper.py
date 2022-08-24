@@ -543,7 +543,7 @@ class InaturalistPhotoScraper:
                 logger.info(f'Number of pages for {year}: {num_pages}')
                 logger.info(
                     f'Number of observations in {year}: {num_observations}')
-                pages_range = range(num_pages)
+                pages_range = range(num_pages + 1)
                 pages_range = pages_range[self.resume_from_page:]
 
                 for page in pages_range:
