@@ -3,7 +3,6 @@
 
 import hashlib
 import io
-import json
 import os
 import re
 import signal
@@ -14,7 +13,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-import pymongo
 import requests
 from loguru import logger
 from minio import Minio
@@ -22,7 +20,6 @@ from minio.error import InvalidResponseError, S3Error
 from requests import Response
 from requests.exceptions import HTTPError, JSONDecodeError
 from requests.structures import CaseInsensitiveDict
-from tqdm import tqdm
 
 
 class InaturalistPhotoScraper:
@@ -76,11 +73,6 @@ class InaturalistPhotoScraper:
                               access_key=os.environ['S3_ACCESS_KEY'],
                               secret_key=os.environ['S3_SECRET_KEY'])
         return s3_client
-
-    @staticmethod
-    def _progress_db():
-        client = pymongo.MongoClient(os.environ['MONGODB_CONNECTION_STRING'])
-        return client.inat_progress['inat_progress']
 
     def _logger(self) -> logger:
         """Returns a logger instance.
@@ -291,11 +283,11 @@ class InaturalistPhotoScraper:
                         s3_object = self.s3.get_object(bucket, fname)
                         object_info = s3_object.info()
                         if object_info.get('Etag'):
-                            object_etag = object_info.strip('"')
+                            object_etag = object_info['Etag'].strip('"')
                             if Path(fname).stem == object_etag:
                                 logger.warning(
-                                    'File already exists in the bucket! Skipping...'
-                                )
+                                    'File already exists in the bucket! '
+                                    'Skipping... ')
                                 return True
                     except S3Error:
                         continue
@@ -310,121 +302,6 @@ class InaturalistPhotoScraper:
                     f.write(r.content)
             logger.debug(f'({photo_uuid}) ✅ Downloaded')
         return True
-
-    def write_progress(self) -> dict:
-        """Writes the progress collection."""
-        logger.info(f'Writing progress for taxon_id: {self.taxon_id}')
-        num_pages, num_observations = self.get_num_pages()
-        taxon_key = str(self.taxon_id)
-
-        progress_file = Path.home() / 'inat_scraper_progress.json'
-        if progress_file.exists():
-            logger.info(f'Found an existing progress file: {progress_file}')
-            with open(progress_file) as j:
-                progress = json.load(j)
-        else:
-            logger.warning(
-                'Could not find an existing progress file. Writing progress '
-                '\for the first time...')
-            progress = {
-                taxon_key: {
-                    'observations': num_observations,
-                    'progress': {}
-                }
-            }
-
-        logger.info(
-            f'No. of page: {num_pages}. No. of observations: {num_observations}'
-        )
-
-        if num_observations > 10000:
-            logger.info(
-                'No. of observations > 10,000. Writing progress per year.page.'
-            )
-            progress[taxon_key]['parent_key'] = 'year'
-            if not self.end_year:
-                self.end_year = datetime.now().year
-            for year in tqdm(range(self.start_year, self.end_year + 1)):
-                num_pages, _ = self.get_num_pages(on_year=year)
-                progress[taxon_key]['progress'][str(year)] = {
-                    str(k): 'pending'
-                    for k in range(num_pages + 1)
-                }
-        else:
-            logger.info(
-                'No. of observations < 10,000. Writing progress per page.')
-            progress[taxon_key]['parent_key'] = 'page'
-            progress[taxon_key]['progress'] = {
-                str(k): 'pending'
-                for k in range(num_pages + 1)
-            }
-
-        if os.getenv('MONGODB_CONNECTION_STRING'):
-            db = self._progress_db()
-            db.insert_one(progress)
-        else:
-            with open(progress_file, 'w') as j:
-                json.dump(progress, j, indent=4)
-            logger.info(f'Wrote progress file to: {progress_file}')
-        return progress
-
-    def check_progress(self,
-                       page: Union[int, str],
-                       mark_as_complete: bool = False) -> Optional[int]:
-        """Checks the progress of the download.
-
-        Args:
-            page (int): Page number.
-            mark_as_complete (bool, optional): Whether to mark the page as
-                complete or not.
-
-        Returns:
-            int: Returns 1 if the page is complete or in-progress, and None if
-            `mark_as_complete` is `True` or page is pending.
-        """
-        page = str(page)
-        year = str(self.start_year) if self.is_large_results else None
-
-        db = self._progress_db()
-
-        if not db.find_one({'_id': self.taxon_id}):
-            if year:
-                self._write_progress_collection(by_year=True)
-            else:
-                self._write_progress_collection()
-
-        progress = db.find_one({'_id': self.taxon_id})['progress']
-        if year:
-            progress_key = progress[year][page]
-        else:
-            progress_key = progress[page]
-
-        if mark_as_complete:
-            db.update_one({'_id': self.taxon_id},
-                          {'$set': {
-                              'progress': progress
-                          }})
-            if year:
-                progress[year][page] = 'complete'
-            else:
-                progress[page] = 'complete'
-            logger.info(f'Marking page {page} as complete!')
-            return
-
-        if progress_key == 'complete':
-            logger.warning(f'Page {page} is already complete!')
-            return 1
-        elif progress_key == 'in-progress':
-            logger.warning(f'Page {page} is already in-progress!')
-            return 1
-        else:
-            logger.info(f'Adding in-progress status to page {page}...')
-            if year:
-                progress[year][page] = 'in-progress'
-            else:
-                progress[page] = 'in-progress'
-
-        db.update_one({'_id': self.taxon_id}, {'$set': {'progress': progress}})
 
     def _get_date(self, sort: str) -> datetime:
         """Gets the datetime object from the current set of observations.
@@ -457,40 +334,33 @@ class InaturalistPhotoScraper:
             year (int, optional): Year to filter by.
 
         Returns:
-            Returns 1 if the page is complete or in-progress, and None if
-                `mark_as_complete` is `True` or page is pending.
+            Returns `True` if `one_page_only` is `Tru`e or if page is equal to
+            `stop_at_page`. Else, return `False`.
         """
         if page == self.stop_at_page:
             logger.warning(f'Stopped at page {page} because '
                            f'`stop_at_page` is set to {self.stop_at_page}.')
-            return 2
+            return True
 
         logger.info(f'Current page: {page}')
 
         self.start_year = year
         self.resume_from_page = page
 
-        if os.getenv('MONGODB_CONNECTION_STRING'):
-            progress_status = self.check_progress(page)
-            if progress_status == 1:
-                if self.one_page_only:
-                    return 1
-                return
         if year:
             observations = self.get_observations(
                 page, additional_params={'year': year})
         else:
             observations = self.get_observations(page)
         if not observations:
+            logger.error('Did not find any observations!')
             return
         uuids = [x['uuid'] for x in observations['results']]
 
         if not uuids:
             self.data['failed_observations'].append(f'failed page: {page}')
-            if self.one_page_only:
-                return 1
-            else:
-                return
+            logger.error('Did not find any results in the observations!')
+            return
 
         if uuids in self.data['uuids']:
             logger.warning(f'Duplicate response in page {page}! '
@@ -505,16 +375,10 @@ class InaturalistPhotoScraper:
             self.download_photos(_uuid)
 
         if self.one_page_only:
-            return 1
-
-        if os.getenv('MONGODB_CONNECTION_STRING'):
-            self.check_progress(page, mark_as_complete=True)
+            return True
 
     def run(self) -> None:
         """Runs the scraper."""
-
-        self._write_progress_collection(by_year=True)
-
         signal.signal(signal.SIGINT, self._keyboard_interrupt_handler)
 
         if not self.output_dir:
@@ -549,21 +413,23 @@ class InaturalistPhotoScraper:
                 pages_range = pages_range[self.resume_from_page:]
 
                 for page in pages_range:
-                    resp_code = self._parse(page, year)
-                    if resp_code in [1, 2]:
-                        if resp_code == 1:
-                            logger.warning('Stopped because `one_page_only` '
-                                           'is set to `True`.')
+                    break_loop = self._parse(page, year)
+                    if break_loop:
+                        logger.warning('Stopped because `one_page_only` '
+                                       'is set to `True` or because current '
+                                       'page is equal to `stop_at_page`.')
                         break
                 if self.one_year_only:
+                    logger.warning('Stopped because `one_year_only` is set '
+                                   'to `True`.')
                     break
 
         else:
             pages_range = pages_range[self.resume_from_page:]
             for page in pages_range:
-                resp_code = self._parse(page)
-                if resp_code in [1, 2]:
-                    if resp_code == 1:
-                        logger.warning('Stopped because `one_page_only` '
-                                       'is set to `True`.')
+                break_loop = self._parse(page)
+                if break_loop:
+                    logger.warning('Stopped because `one_page_only` '
+                                   'is set to `True` or because current '
+                                   'page is equal to `stop_at_page`.')
                     break

@@ -2,7 +2,6 @@
 # coding: utf-8
 
 import argparse
-import json
 
 from dotenv import load_dotenv
 from inaturalist.scraper import InaturalistPhotoScraper
@@ -61,13 +60,6 @@ def _opts() -> argparse.Namespace:
                         '--one-year-only',
                         help='Terminate after completing a single year',
                         action='store_true')
-    parser.add_argument('--write-progress',
-                        help='Write progress file/collection to track the '
-                        'download progress of a specific taxon id',
-                        action='store_true')
-    parser.add_argument('--get-current-progress',
-                        help='Get current progress',
-                        action='store_true')
     parser.add_argument('--check-multiple-buckets',
                         help='Check multiple buckets for existing files',
                         type=str)
@@ -92,15 +84,7 @@ def main() -> None:
         end_year=args.end_year,
         one_year_only=args.one_year_only,
         check_multiple_buckets=args.check_multiple_buckets)
-
-    # if args.get_current_progress:
-    #     progress = scraper.get_progress_data(f'{args.taxon_id}_progress.json')
-    #     print(json.dumps(progress, indent=4))
-    # else:
-    #     scraper.run()
-
-    if args.write_progress:
-        scraper.write_progress()
+    scraper.run()
 
 
 if __name__ == '__main__':

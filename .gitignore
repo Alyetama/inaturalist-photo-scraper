@@ -193,3 +193,4 @@ logs/
 downloaded_images_*/
 _ignore
 build
+_scraper.py
