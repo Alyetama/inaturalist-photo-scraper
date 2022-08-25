@@ -289,12 +289,14 @@ class InaturalistPhotoScraper:
                 for bucket in buckets:
                     try:
                         s3_object = self.s3.get_object(bucket, fname)
-                        object_etag = s3_object.info()['Etag'].strip('"')
-                        if Path(fname).stem == object_etag:
-                            logger.warning(
-                                'File already exists in the bucket! Skipping...'
-                            )
-                            return True
+                        object_info = s3_object.info()
+                        if object_info.get('Etag'):
+                            object_etag = object_info.strip('"')
+                            if Path(fname).stem == object_etag:
+                                logger.warning(
+                                    'File already exists in the bucket! Skipping...'
+                                )
+                                return True
                     except S3Error:
                         continue
 
