@@ -194,3 +194,4 @@ downloaded_images_*/
 _ignore
 build
 _scraper.py
+*_progress.html

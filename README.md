@@ -16,8 +16,10 @@ pip install inaturalist
 ## ⌨️ Usage
 
 ```
-usage: inat [-h] -t TAXON_ID [-o OUTPUT_DIR] [-p RESUME_FROM_PAGE] [-P STOP_AT_PAGE] [-u RESUME_FROM_UUID_INDEX] [--upload-to-s3] [-O]
-            [-r RESULTS_PER_PAGE] [-s START_YEAR] [-e END_YEAR] [-Y] [--get-current-progress]
+usage: inat [-h] -t TAXON_ID [-o OUTPUT_DIR] [-p RESUME_FROM_PAGE]
+            [-P STOP_AT_PAGE] [-u RESUME_FROM_UUID_INDEX] [--upload-to-s3]
+            [-O] [-r RESULTS_PER_PAGE] [-s START_YEAR] [-e END_YEAR] [-Y]
+            [--check-multiple-buckets CHECK_MULTIPLE_BUCKETS] [-g]
 
 options:
   -h, --help            show this help message and exit
@@ -36,10 +38,15 @@ options:
   -r RESULTS_PER_PAGE, --results-per-page RESULTS_PER_PAGE
                         Number of results per page
   -s START_YEAR, --start-year START_YEAR
-                        Year to start from (only relevant when number of observations > 10,000)
+                        Year to start from (only relevant when number of
+                        observations > 10,000)
   -e END_YEAR, --end-year END_YEAR
-                        Year to stop at (only relevant when number of observations > 10,000)
+                        Year to stop at (only relevant when number of
+                        observations > 10,000)
   -Y, --one-year-only   Terminate after completing a single year
-  --get-current-progress
-                        Get current progress
+  --check-multiple-buckets CHECK_MULTIPLE_BUCKETS
+                        Check multiple buckets for existing files
+  -g, --github-actions-strategy
+                        Get optimal github actions strategy for the pages and
+                        years per workflow run
 ```

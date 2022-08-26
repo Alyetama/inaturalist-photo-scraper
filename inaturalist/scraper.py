@@ -27,7 +27,7 @@ class InaturalistPhotoScraper:
     def __init__(self,
                  taxon_id: int,
                  output_dir: Optional[str] = None,
-                 resume_from_page: int = 0,
+                 resume_from_page: int = 1,
                  stop_at_page: Optional[int] = None,
                  resume_from_uuid_index: int = 0,
                  upload_to_s3: bool = False,
@@ -168,7 +168,7 @@ class InaturalistPhotoScraper:
             tuple: A tuple of (number of pages, number of observations).
         """
         url = 'https://api.inaturalist.org/v2/observations'
-        params = {'taxon_id': self.taxon_id}
+        params = {'taxon_id': self.taxon_id, 'photos': 'true'}
         if on_year:
             params.update({'year': on_year})
         r = self._get_request(url, params=params)

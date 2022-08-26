@@ -2,8 +2,12 @@
 # coding: utf-8
 
 import argparse
+import sys
+from datetime import datetime
 
 from dotenv import load_dotenv
+
+from inaturalist.github_actions_strategy import github_actions_strategy
 from inaturalist.scraper import InaturalistPhotoScraper
 
 
@@ -55,7 +59,8 @@ def _opts() -> argparse.Namespace:
                         '--end-year',
                         help='Year to stop at '
                         '(only relevant when number of observations > 10,000)',
-                        type=int)
+                        type=int,
+                        default=datetime.today().year)
     parser.add_argument('-Y',
                         '--one-year-only',
                         help='Terminate after completing a single year',
@@ -63,14 +68,27 @@ def _opts() -> argparse.Namespace:
     parser.add_argument('--check-multiple-buckets',
                         help='Check multiple buckets for existing files',
                         type=str)
+    parser.add_argument('-g',
+                        '--github-actions-strategy',
+                        help='Get optimal github actions strategy for the '
+                        'pages and years per workflow run',
+                        action='store_true')
     return parser.parse_args()
 
 
 def main() -> None:
     """Main function."""
     args = _opts()
+
     if args.check_multiple_buckets:
         args.check_multiple_buckets = args.check_multiple_buckets.split(',')
+
+    if args.github_actions_strategy:
+        github_actions_strategy(taxon_id=args.taxon_id,
+                                start_year=args.start_year,
+                                end_year=args.end_year)
+        sys.exit(0)
+
     scraper = InaturalistPhotoScraper(
         taxon_id=args.taxon_id,
         output_dir=args.output_dir,
