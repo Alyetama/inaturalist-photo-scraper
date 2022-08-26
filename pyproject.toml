@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "inaturalist"
-version = "0.1.9"
+version = "0.1.10"
 description = "iNaturalist Photo Scraper"
 authors = ["Alyetama <malyetama@pm.me>"]
 license = "MIT"
