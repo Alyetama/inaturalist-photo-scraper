@@ -18,7 +18,7 @@ from loguru import logger
 from minio import Minio
 from minio.error import InvalidResponseError, S3Error
 from requests import Response
-from requests.exceptions import HTTPError, JSONDecodeError
+from requests.exceptions import HTTPError, JSONDecodeError, MissingSchema
 from requests.structures import CaseInsensitiveDict
 
 
@@ -153,7 +153,7 @@ class InaturalistPhotoScraper:
                 return r.json()
             else:
                 return r
-        except (HTTPError, JSONDecodeError) as e:
+        except (HTTPError, JSONDecodeError, MissingSchema) as e:
             logger.error(f'Failed to get {url}! (ERROR: {e})')
             logger.exception(e)
             self.data['failed_observations'].append(url)
